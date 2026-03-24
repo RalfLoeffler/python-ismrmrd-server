@@ -11,15 +11,14 @@
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "args": [
-                "-p", "9020",
+                "-p",
+                "9020",
                 // "-v",
                 // "-s"
             ],
             "console": "integratedTerminal",
-            "consoleTitle": "Server",
             "justMyCode": true,
         },
-
         // Run client
         {
             "name": "Run client",
@@ -28,21 +27,24 @@
             "program": "${workspaceFolder}/client.py",
             "args": [
                 "${workspaceFolder}/data/shepplogan_raw.mrd",
-                "-p", "9020",
-                "-c", "invertcontrast",
-                "-o", "${workspaceFolder}/data/shepplogan_recon.mrd"
+                "-p",
+                "9020",
+                "-c",
+                "invertcontrast",
+                "-o",
+                "${workspaceFolder}/data/shepplogan_recon.mrd"
             ],
             "console": "integratedTerminal",
-            "consoleTitle": "Client",
             "justMyCode": true,
         },
     ],
-    "compounds":
-    [
+    "compounds": [
         {
             "name": "Server + client",
-            "configurations": ["Start server", "Run client"]
+            "configurations": [
+                "Start server",
+                "Run client"
+            ]
         },
     ]
-
 }

@@ -34,9 +34,9 @@ venc_dir_map = {'rl'  : 'FLOW_DIR_R_TO_L',
 def CalcFieldOfView(dset):
     if dset.SOPClassUID.name == 'Enhanced MR Image Storage':
         try:
-            PixelMeasuresSequence = dset.SharedFunctionalGroupsSequence[0].PixelMeasuresSequence[0]
+            pixel_measures = dset.SharedFunctionalGroupsSequence[0].PixelMeasuresSequence[0]
         except:
-            PixelMeasuresSequence = dset.PerFrameFunctionalGroupsSequence[0].PixelMeasuresSequence[0]
+            pixel_measures = dset.PerFrameFunctionalGroupsSequence[0].PixelMeasuresSequence[0]
 
             uSliceThickness  = set([float(s.PixelMeasuresSequence[0].SliceThickness)  for s in dset.PerFrameFunctionalGroupsSequence])
             uPixelSpacingRow = set([float(s.PixelMeasuresSequence[0].PixelSpacing[0]) for s in dset.PerFrameFunctionalGroupsSequence])
@@ -45,9 +45,9 @@ def CalcFieldOfView(dset):
             if (len(uSliceThickness) > 1) or (len(uPixelSpacingRow) > 1) or (len(uPixelSpacingCol) > 1):
                 print('Warning: Enhanced DICOM has frames with different PixelSpacing or SliceThickness -- only using information from first frame for MRD header')
 
-        return (      PixelMeasuresSequence[0].PixelSpacing[1]*dset.Rows,
-                      PixelMeasuresSequence[0].PixelSpacing[0]*dset.Columns,
-                float(PixelMeasuresSequence[0].SliceThickness))
+        return (      pixel_measures.PixelSpacing[1]*dset.Rows,
+                      pixel_measures.PixelSpacing[0]*dset.Columns,
+                float(pixel_measures.SliceThickness))
 
     elif dset.SOPClassUID.name == 'MR Image Storage':
         return (      dset.PixelSpacing[1]*dset.Rows,
@@ -135,14 +135,51 @@ def CreateMrdHeader(dset):
     mrdHead.encoding.append(enc)
 
     mrdHead.sequenceParameters               = ismrmrd.xsd.sequenceParametersType()
-    if hasattr(dset, 'SharedFunctionalGroupsSequence'):
-        mrdHead.sequenceParameters.TR            = float(dset.SharedFunctionalGroupsSequence[0].MRTimingAndRelatedParametersSequence[0].RepetitionTime)
-        mrdHead.sequenceParameters.flipAngle_deg = float(dset.SharedFunctionalGroupsSequence[0].MRTimingAndRelatedParametersSequence[0].FlipAngle)
-        mrdHead.sequenceParameters.TE            =       dset.SharedFunctionalGroupsSequence[0].MREchoSequence[0].EffectiveEchoTime
+
+    def to_float(value, default=0.0):
+        try:
+            return float(value)
+        except:
+            return default
+
+    # Start with top-level fallback values that are common in classic MR Image Storage.
+    tr = to_float(getattr(dset, 'RepetitionTime', None), 0.0)
+    fa = to_float(getattr(dset, 'FlipAngle', None), 0.0)
+    te_attr = getattr(dset, 'EchoTime', getattr(dset, 'EffectiveEchoTime', None))
+    te = to_float(te_attr, 0.0)
+    if te_attr is not None:
+        te_source = 'top-level DICOM EchoTime/EffectiveEchoTime'
     else:
-        mrdHead.sequenceParameters.TR            = float(dset.RepetitionTime)
-        mrdHead.sequenceParameters.flipAngle_deg = float(dset.FlipAngle)
-        mrdHead.sequenceParameters.TE            = float(dset.EchoTime)
+        te_source = 'default 0.0'
+
+    if hasattr(dset, 'SharedFunctionalGroupsSequence'):
+        try:
+            timing = dset.SharedFunctionalGroupsSequence[0].MRTimingAndRelatedParametersSequence[0]
+            tr = to_float(getattr(timing, 'RepetitionTime', tr), tr)
+            fa = to_float(getattr(timing, 'FlipAngle', fa), fa)
+        except:
+            pass
+
+        # Some enhanced MR files do not include MREchoSequence in the shared group.
+        try:
+            te = to_float(dset.SharedFunctionalGroupsSequence[0].MREchoSequence[0].EffectiveEchoTime, te)
+            te_source = 'SharedFunctionalGroupsSequence.MREchoSequence.EffectiveEchoTime'
+        except:
+            pass
+
+    if (te == 0.0) and hasattr(dset, 'PerFrameFunctionalGroupsSequence'):
+        try:
+            te = to_float(dset.PerFrameFunctionalGroupsSequence[0].MREchoSequence[0].EffectiveEchoTime, te)
+            te_source = 'PerFrameFunctionalGroupsSequence.MREchoSequence.EffectiveEchoTime'
+        except:
+            pass
+
+    if hasattr(dset, 'SharedFunctionalGroupsSequence') and (te_source != 'SharedFunctionalGroupsSequence.MREchoSequence.EffectiveEchoTime'):
+        print(f'Warning: Could not find TE in SharedFunctionalGroupsSequence MREchoSequence; using fallback TE from {te_source}')
+
+    mrdHead.sequenceParameters.TR            = tr
+    mrdHead.sequenceParameters.flipAngle_deg = fa
+    mrdHead.sequenceParameters.TE            = te
 
     # -------------------- User parameters --------------------
     userParameters = ismrmrd.xsd.userParametersType()
