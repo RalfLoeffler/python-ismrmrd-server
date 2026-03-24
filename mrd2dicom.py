@@ -9,6 +9,11 @@ import numpy as np
 import pydicom
 import base64
 
+defaults = {
+    'in_group':   '',
+    'out_folder': ''
+}
+
 # Lookup table between DICOM and MRD mrdImg types
 imtype_map = {ismrmrd.IMTYPE_MAGNITUDE : 'M',
               ismrmrd.IMTYPE_PHASE     : 'P',
@@ -27,6 +32,13 @@ venc_dir_map = {'FLOW_DIR_R_TO_L' : 'rl',
                 'FLOW_DIR_TP_OUT' : 'out'}
 
 def main(args):
+    # Support both CLI-style snake_case and notebook-style camelCase argument names.
+    if hasattr(args, 'inGroup') and ((not hasattr(args, 'in_group')) or (not args.in_group)):
+        args.in_group = args.inGroup
+
+    if hasattr(args, 'outFolder') and ((not hasattr(args, 'out_folder')) or (not args.out_folder)):
+        args.out_folder = args.outFolder
+
     dset = h5py.File(args.filename, 'r')
     if not dset:
         print("Not a valid dataset: %s" % (args.filename))
