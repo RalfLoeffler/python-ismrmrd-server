@@ -1,0 +1,46 @@
+﻿# >>> medsam2 liver addon ignore
+# Local Python environments. These should never be sent to Docker.
+.venv
+.venv/
+**/.venv
+**/.venv/
+venv
+venv/
+**/venv
+**/venv/
+
+# Python cache/build artifacts.
+__pycache__
+__pycache__/
+**/__pycache__
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Git/editor/notebook scratch files.
+.git
+.git/
+.gitignore
+.ipynb_checkpoints
+.ipynb_checkpoints/
+**/.ipynb_checkpoints
+**/.ipynb_checkpoints/
+.vscode
+.idea
+
+# Large or unnecessary local results inside the copied MedSAM2 tree.
+# The deploy package already carries the required portable bundle and base checkpoint.
+medsam2_liver/sam2/outputs
+medsam2_liver/sam2/outputs/
+medsam2_liver/**/*.pyc
+medsam2_liver/**/__pycache__
+medsam2_liver/**/.ipynb_checkpoints
+# <<< medsam2 liver addon ignore
+
+
+
+

@@ -6,3 +6,9 @@
 *.tar
 *.zip
 data/
+# MedSAM2 generated deployment artifacts
+medsam2_liver/
+inputs/
+outputs/
+Dockerfile.medsam2_addon.before_*
+.venv/

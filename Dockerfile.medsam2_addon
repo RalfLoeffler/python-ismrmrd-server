@@ -1,0 +1,172 @@
+﻿# MedSAM2 liver add-on Dockerfile
+#
+# Based on the uploaded python-ismrmrd-server Dockerfile.
+# It preserves the original MRD converter, ISMRMRD runtime, Python MRD tooling,
+# python-ismrmrd-server copy, working directory, and default CMD.
+#
+# Additional MedSAM2 liver files are copied from ./medsam2_liver into
+# /opt/medsam2_liver and are available without replacing upstream/downstream
+# python-ismrmrd-server behavior.
+
+# ----- 1. First stage to build ismrmrd and siemens_to_ismrmrd -----
+FROM pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime AS mrd_converter
+ARG  DEBIAN_FRONTEND=noninteractive
+ENV  TZ=America/Chicago
+
+RUN  apt-get update && apt-get install -y git cmake g++ libhdf5-dev libxml2-dev libxslt1-dev libboost-all-dev libfftw3-dev libpugixml-dev
+RUN  mkdir -p /opt/code
+
+# ISMRMRD library
+RUN cd /opt/code && \
+    git clone https://github.com/ismrmrd/ismrmrd.git && \
+    cd ismrmrd && \
+    git checkout d364e03 && \
+    mkdir build && \
+    cd build && \
+    cmake ../ && \
+    make -j $(nproc) && \
+    make install
+
+# siemens_to_ismrmrd converter
+RUN cd /opt/code && \
+    git clone https://github.com/ismrmrd/siemens_to_ismrmrd.git && \
+    cd siemens_to_ismrmrd && \
+    git checkout v1.2.11 && \
+    mkdir build && \
+    cd build && \
+    cmake ../ && \
+    make -j $(nproc) && \
+    make install
+
+# Create archive of ISMRMRD libraries (including symlinks) for second stage
+RUN cd /usr/local/lib && tar -czvf libismrmrd.tar.gz libismrmrd*
+
+# ----- 2. Create a devcontainer without all of the build dependencies of MRD -----
+FROM pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime AS python-mrd-cuda-devcontainer
+
+LABEL org.opencontainers.image.description="Python MRD Image Reconstruction and Analysis Server + MedSAM2 Liver Add-on"
+LABEL org.opencontainers.image.url="https://github.com/kspaceKelvin/python-ismrmrd-server"
+LABEL org.opencontainers.image.authors="Kelvin Chow (kelvin.chow@siemens-healthineers.com); MedSAM2 liver add-on"
+
+# Copy ISMRMRD files from last stage
+COPY --from=mrd_converter /usr/local/include/ismrmrd        /usr/local/include/ismrmrd/
+COPY --from=mrd_converter /usr/local/share/ismrmrd          /usr/local/share/ismrmrd/
+COPY --from=mrd_converter /usr/local/bin/ismrmrd*           /usr/local/bin/
+COPY --from=mrd_converter /usr/local/lib/libismrmrd.tar.gz  /usr/local/lib/
+RUN cd /usr/local/lib && tar -zxvf libismrmrd.tar.gz && rm libismrmrd.tar.gz && ldconfig
+
+# Copy siemens_to_ismrmrd from last stage
+COPY --from=mrd_converter /usr/local/bin/siemens_to_ismrmrd  /usr/local/bin/siemens_to_ismrmrd
+
+# Add dependencies for siemens_to_ismrmrd
+RUN apt-get update && apt-get install --no-install-recommends -y libxslt1.1 libhdf5-103 libboost-program-options1.74.0 libpugixml1v5 git dos2unix nano libglib2.0-0 libgl1 && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /opt/code
+
+# Tell nano to remember its position from the last time it opened a file
+RUN echo "set positionlog" > ~/.nanorc
+
+# Python MRD library
+RUN pip3 install h5py==3.10.0 ismrmrd==1.14.1
+
+RUN cd /opt/code && \
+    git clone https://github.com/ismrmrd/ismrmrd-python-tools.git && \
+    cd /opt/code/ismrmrd-python-tools && \
+    pip3 install --no-cache-dir .
+
+# matplotlib is used by rgb.py and provides various visualization tools including colormaps
+# pydicom is used by dicom2mrd.py to parse DICOM data
+RUN pip3 install --no-cache-dir matplotlib==3.8.2 pydicom==3.0.1
+
+# Cleanup files not required after installation
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -rf /root/.cache/pip
+
+# ----- 3. Copy deployed code into the devcontainer for deployment -----
+FROM python-mrd-cuda-devcontainer AS python-mrd-runtime
+
+# If building from the GitHub repo, uncomment the below section, open a command
+# prompt in the folder containing this Dockerfile and run the command:
+#    docker build --no-cache -t kspacekelvin/fire-python ./
+# RUN cd /opt/code && \
+#     git clone https://github.com/kspaceKelvin/python-ismrmrd-server.git
+
+# If doing local development, use this section to copy local code into Docker
+# image. From the python-ismrmrd-server folder, run e.g.:
+#    docker build --no-cache -t fire-python-medsam2 -f Dockerfile.medsam2_addon ./
+RUN mkdir -p /opt/code/python-ismrmrd-server
+COPY . /opt/code/python-ismrmrd-server
+
+# Throw an explicit error if docker build is run from the folder *containing*
+# python-ismrmrd-server instead of within it (i.e. old method)
+RUN if [ -d /opt/code/python-ismrmrd-server/python-ismrmrd-server ]; then echo "docker build should be run inside of python-ismrmrd-server instead of one directory up"; exit 1; fi
+
+# Ensure startup scripts have Unix (LF) line endings, which may not be true
+# if the git repo is cloned in Windows
+RUN find /opt/code/python-ismrmrd-server -name "*.sh" | xargs -r dos2unix
+
+# Ensure startup scripts are marked as executable, which may be lost if files
+# are copied in Windows
+RUN find /opt/code/python-ismrmrd-server -name "*.sh" -exec chmod +x {} \;
+
+# ----- 4. MedSAM2 liver add-on -----
+# The build context should contain a medsam2_liver/ folder prepared by
+# scripts/prepare_medsam2_liver_addon.ps1. This keeps the upstream server code
+# intact and adds the liver segmentation package beside it.
+RUN mkdir -p /opt/medsam2_liver
+COPY medsam2_liver/ /opt/medsam2_liver/
+
+# Do not install torch here. The base image already has the required
+# pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime stack.
+#
+# Keep NumPy/HDF5 packages ABI-aligned. Some packages can otherwise pull a
+# different NumPy version after h5py has been installed, causing runtime errors
+# such as:
+#   ValueError: numpy.dtype size changed, may indicate binary incompatibility
+RUN if [ -f /opt/medsam2_liver/requirements-medsam2.txt ]; then \
+        pip3 install --no-cache-dir -r /opt/medsam2_liver/requirements-medsam2.txt; \
+    fi && \
+    pip3 install --no-cache-dir --force-reinstall \
+        "numpy==1.26.4" \
+        "h5py==3.10.0" \
+        "scipy==1.11.4" && \
+    python3 - <<'H5PYCHECK'
+import numpy as np
+import h5py
+import scipy
+print('NumPy version:', np.__version__)
+print('h5py version:', h5py.__version__)
+print('SciPy version:', scipy.__version__)
+H5PYCHECK
+
+# Explicit PYTHONPATH; no undefined ${PYTHONPATH} expansion.
+ENV PYTHONPATH=/opt/medsam2_liver:/opt/code/python-ismrmrd-server
+ENV MEDSAM2_LIVER_HOME=/opt/medsam2_liver
+ENV MEDSAM2_BUNDLE=/opt/medsam2_liver/portable_medsam2_liver_bundle.pt
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV PYTHONUNBUFFERED=1
+
+# Build-time torch import check. GPU visibility is tested at runtime with
+# app/check_pytorch_stack.py because GPUs are not usually visible during build.
+RUN python3 - <<'PYTORCHCHECK'
+import torch
+print('PyTorch version:', torch.__version__)
+print('PyTorch CUDA build:', torch.version.cuda)
+print('CUDA available during build:', torch.cuda.is_available())
+PYTORCHCHECK
+
+# Set the starting directory so upstream/downstream python-ismrmrd-server code
+# can keep using relative paths, as in the uploaded Dockerfile.
+WORKDIR /opt/code/python-ismrmrd-server
+
+# Preserve the uploaded Dockerfile default server command. Override this command
+# at docker run time when you want to run MedSAM2 liver inference directly, e.g.:
+#   docker run --rm --gpus all image python3 /opt/medsam2_liver/app/inference_cli.py --print-metadata
+CMD [ "python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log", "--defaultConfig=invertcontrast"]
+
+# Replace the above CMD with this ENTRYPOINT to allow "docker stop"
+# commands to be passed to the server. This is useful for deployments, but
+# more annoying for development
+# ENTRYPOINT [ "python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log"]
+
